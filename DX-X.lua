@@ -1,0 +1,931 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+-- 1. Ensure Game is Loaded
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- 2. Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local HttpService = game:GetService("HttpService")
+
+-- 3. Local Player Setup
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local camera = workspace.CurrentCamera
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Variables
+local customSpawnPoint = nil
+local ConfigFile = "DX_V3_Config.json"
+local currentMoveSpeed = 50
+local minimized = false
+local flyBV, flyConn, camPart, camConn
+local infJumpConnection = nil
+
+local States = {
+    EyeExe = false, Speed = false, Jump = false, InfJump = false,
+    Fullbright = false, Noclip = false, ESP = false, Fly = false,
+    Freecam = false, LowGravity = false
+}
+
+--------------------------------------------------------------------------------
+-- MOVEMENT CALCULATION
+--------------------------------------------------------------------------------
+local function GetCameraRelativeDirection()
+    local dir = Vector3.new(0, 0, 0)
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0, 1, 0) end
+
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        local moveDir = player.Character.Humanoid.MoveDirection
+        if moveDir.Magnitude > 0 and dir.Magnitude == 0 then
+            local look = camera.CFrame.LookVector
+            local right = camera.CFrame.RightVector
+            local forwardAmt = moveDir:Dot(camera.CFrame.LookVector.Unit)
+            local rightAmt = moveDir:Dot(camera.CFrame.RightVector.Unit)
+            dir = (look * forwardAmt) + (right * rightAmt)
+        end
+    end
+    return dir
+end
+
+--------------------------------------------------------------------------------
+-- DATA & MORPH
+--------------------------------------------------------------------------------
+local function SaveConfig()
+    if writefile then pcall(function() writefile(ConfigFile, HttpService:JSONEncode(States)) end) end
+end
+
+local function LoadConfig()
+    if isfile and isfile(ConfigFile) then
+        local success, decoded = pcall(function() return HttpService:JSONDecode(readfile(ConfigFile)) end)
+        if success and decoded then 
+            for k, v in pairs(decoded) do if States[k] ~= nil then States[k] = v end end
+        end
+    end
+end
+LoadConfig()
+
+local function ApplyEyeMorph(char)
+    if not char or not States.EyeExe then return end
+    pcall(function()
+        local model = Players:GetCharacterAppearanceAsync(7782621813)
+        for _, v in pairs(char:GetChildren()) do
+            if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("CharacterMesh") or v:IsA("BodyColors") then v:Destroy() end
+        end
+        for _, v in pairs(model:GetChildren()) do v.Parent = char end
+        model:Destroy()
+    end)
+end
+player.CharacterAdded:Connect(ApplyEyeMorph)
+
+--------------------------------------------------------------------------------
+-- UI CONSTRUCTION
+--------------------------------------------------------------------------------
+if playerGui:FindFirstChild("DX_V3") then playerGui.DX_V3:Destroy() end
+
+local clickSound = Instance.new("Sound")
+clickSound.SoundId = "rbxassetid://6324790483"
+clickSound.Volume = 0.5
+clickSound.Parent = game:GetService("SoundService")
+
+local gui = Instance.new("ScreenGui", playerGui)
+gui.Name = "DX_V3"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+
+local function AddTextStroke(obj)
+    local s = Instance.new("UIStroke", obj)
+    s.Thickness = 2
+    s.Color = Color3.new(0,0,0)
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    return s
+end
+
+local tpBtn = Instance.new("ImageButton", gui)
+tpBtn.Name = "FreecamTP"
+tpBtn.Size = UDim2.new(0, 70, 0, 70)
+tpBtn.Position = UDim2.new(0.5, -35, 0.75, 0)
+tpBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+tpBtn.Image = "rbxassetid://8763582315"
+tpBtn.Visible = false
+Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(1, 0)
+local tpStroke = Instance.new("UIStroke", tpBtn)
+tpStroke.Thickness = 3
+tpStroke.Color = Color3.fromRGB(255, 0, 0)
+
+local mainFrame = Instance.new("Frame", gui)
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 500, 0, 400)
+mainFrame.Position = UDim2.new(0.5, -250, 0.5, -200)
+mainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+local mainGrad = Instance.new("UIGradient", mainFrame)
+mainGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(160, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20))}
+mainGrad.Rotation = 45
+local mainStroke = Instance.new("UIStroke", mainFrame)
+mainStroke.Thickness = 3
+mainStroke.Color = Color3.fromRGB(255, 0, 0)
+
+local topBar = Instance.new("Frame", mainFrame)
+topBar.Size = UDim2.new(1, 0, 0, 45)
+topBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+local topGrad = Instance.new("UIGradient", topBar)
+topGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 10))}
+
+local titleLabel = Instance.new("TextLabel", topBar)
+titleLabel.Text = "  DX PANEL V3"
+titleLabel.Font = Enum.Font.GothamBlack
+titleLabel.TextSize = 18
+titleLabel.TextColor3 = Color3.new(1,1,1)
+titleLabel.Size = UDim2.new(0.4, 0, 1, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+AddTextStroke(titleLabel)
+
+local sliderFrame = Instance.new("Frame", topBar)
+sliderFrame.Size = UDim2.new(0, 120, 0, 18)
+sliderFrame.Position = UDim2.new(1, -210, 0.5, -9)
+sliderFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Instance.new("UICorner", sliderFrame).CornerRadius = UDim.new(0,4)
+local sliderFill = Instance.new("Frame", sliderFrame)
+sliderFill.Size = UDim2.new(0.5, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(0,4)
+local sliderLabel = Instance.new("TextLabel", sliderFrame)
+sliderLabel.Text = "SPD: 50"
+sliderLabel.Size = UDim2.new(1,0,1,0)
+sliderLabel.TextColor3 = Color3.new(1,1,1)
+sliderLabel.BackgroundTransparency = 1
+sliderLabel.Font = Enum.Font.GothamBold
+sliderLabel.TextSize = 11
+AddTextStroke(sliderLabel)
+
+sliderFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local con
+        con = RunService.RenderStepped:Connect(function()
+            local inputPos = (input.UserInputType == Enum.UserInputType.Touch and input.Position.X or UserInputService:GetMouseLocation().X)
+            local rel = math.clamp((inputPos - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X, 0, 1)
+            sliderFill.Size = UDim2.new(rel, 0, 1, 0)
+            currentMoveSpeed = math.floor(rel * 400)
+            sliderLabel.Text = "SPD: "..currentMoveSpeed
+            if input.UserInputState == Enum.UserInputState.End then con:Disconnect() end
+        end)
+    end
+end)
+
+local searchFrame = Instance.new("Frame", mainFrame)
+searchFrame.Size = UDim2.new(1, -20, 0, 30)
+searchFrame.Position = UDim2.new(0, 10, 0, 55)
+searchFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+searchFrame.BackgroundTransparency = 0.5
+Instance.new("UICorner", searchFrame).CornerRadius = UDim.new(0, 6)
+local searchBox = Instance.new("TextBox", searchFrame)
+searchBox.Size = UDim2.new(1, -10, 1, 0)
+searchBox.Position = UDim2.new(0, 5, 0, 0)
+searchBox.BackgroundTransparency = 1
+searchBox.PlaceholderText = "Search command..."
+searchBox.TextColor3 = Color3.new(1,1,1)
+searchBox.Font = Enum.Font.GothamBold
+searchBox.TextSize = 14
+
+local scroll = Instance.new("ScrollingFrame", mainFrame)
+scroll.Size = UDim2.new(1, -20, 1, -100)
+scroll.Position = UDim2.new(0, 10, 0, 95)
+scroll.BackgroundTransparency = 1
+scroll.ScrollBarThickness = 4
+scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+local mainListLayout = Instance.new("UIListLayout", scroll)
+mainListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+mainListLayout.Padding = UDim.new(0, 10)
+
+local buttonContainer = Instance.new("Frame", scroll)
+buttonContainer.Size = UDim2.new(1, 0, 0, 0)
+buttonContainer.BackgroundTransparency = 1
+buttonContainer.AutomaticSize = Enum.AutomaticSize.Y
+buttonContainer.LayoutOrder = 1
+local grid = Instance.new("UIGridLayout", buttonContainer)
+grid.CellSize = UDim2.new(0, 145, 0, 40)
+grid.CellPadding = UDim2.new(0, 10, 0, 10)
+grid.SortOrder = Enum.SortOrder.LayoutOrder
+grid.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+-- FIXED CREDITS (No longer overlapping)
+local creditsContainer = Instance.new("Frame", scroll)
+creditsContainer.Size = UDim2.new(1, 0, 0, 60)
+creditsContainer.BackgroundTransparency = 1
+creditsContainer.LayoutOrder = 2
+local credList = Instance.new("UIListLayout", creditsContainer)
+credList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+credList.Padding = UDim.new(0, 2)
+
+local credit1 = Instance.new("TextLabel", creditsContainer)
+credit1.Size = UDim2.new(1, 0, 0, 25)
+credit1.BackgroundTransparency = 1
+credit1.Text = "made by elijah145887"
+credit1.TextColor3 = Color3.new(1,1,1)
+credit1.Font = Enum.Font.GothamBlack
+credit1.TextSize = 18
+AddTextStroke(credit1)
+
+local credit2 = Instance.new("TextLabel", creditsContainer)
+credit2.Size = UDim2.new(1, 0, 0, 20)
+credit2.BackgroundTransparency = 1
+credit2.Text = "youtube: DevSpectraX"
+credit2.TextColor3 = Color3.fromRGB(255, 80, 80)
+credit2.Font = Enum.Font.GothamBold
+credit2.TextSize = 14
+AddTextStroke(credit2)
+
+--------------------------------------------------------------------------------
+-- BUTTON CREATOR
+--------------------------------------------------------------------------------
+local function createButton(text, stateKey, callback)
+    local btnContainer = Instance.new("Frame", buttonContainer)
+    btnContainer.Name = text
+    btnContainer.BackgroundTransparency = 1
+    local btn = Instance.new("TextButton", btnContainer)
+    btn.Text = text
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    AddTextStroke(btn)
+    local btnStroke = Instance.new("UIStroke", btn)
+    btnStroke.Thickness = 2
+    btnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    
+    local function update()
+        if stateKey then
+            btn.BackgroundColor3 = States[stateKey] and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(40, 40, 40)
+            btnStroke.Color = States[stateKey] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(100, 100, 100)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            btnStroke.Color = Color3.fromRGB(100, 100, 100)
+        end
+    end
+
+    btn.MouseButton1Click:Connect(function() 
+        clickSound:Play() 
+        if stateKey then
+            States[stateKey] = not States[stateKey] 
+            update() 
+            SaveConfig() 
+            callback(States[stateKey]) 
+        elseif callback then callback() end
+    end)
+    update()
+    if stateKey and States[stateKey] then task.spawn(function() callback(true) end) end
+end
+
+--------------------------------------------------------------------------------
+-- FEATURES
+--------------------------------------------------------------------------------
+createButton("FLY", "Fly", function(state)
+    if state then
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            flyBV = Instance.new("BodyVelocity", player.Character.HumanoidRootPart)
+            flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            flyConn = RunService.RenderStepped:Connect(function()
+                local dir = GetCameraRelativeDirection()
+                flyBV.Velocity = dir.Magnitude > 0 and dir.Unit * currentMoveSpeed or Vector3.new(0,0,0)
+            end)
+        end
+    else
+        if flyConn then flyConn:Disconnect() end
+        if flyBV then flyBV:Destroy() end
+    end
+end)
+
+createButton("FREECAM", "Freecam", function(state)
+    tpBtn.Visible = state
+    if state then
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.Anchored = true end
+        camPart = Instance.new("Part", workspace)
+        camPart.Anchored = true
+        camPart.Transparency = 1
+        camPart.CanCollide = false
+        camPart.CFrame = camera.CFrame
+        camera.CameraSubject = camPart
+        camConn = RunService.RenderStepped:Connect(function()
+            local dir = GetCameraRelativeDirection()
+            if dir.Magnitude > 0 then camPart.CFrame = camPart.CFrame + (dir.Unit * (currentMoveSpeed/60)) end
+        end)
+    else
+        if camConn then camConn:Disconnect() end
+        if camPart then camPart:Destroy() end
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.Anchored = false end
+        if player.Character and player.Character:FindFirstChild("Humanoid") then camera.CameraSubject = player.Character.Humanoid end
+    end
+end)
+
+tpBtn.MouseButton1Click:Connect(function() 
+    if camPart and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.CFrame = camPart.CFrame clickSound:Play() end 
+end)
+
+createButton("eye.exe", "EyeExe", function(state)
+    if state then
+        local sky = Instance.new("Sky", Lighting)
+        sky.Name = "EyeSky"
+        local id = "rbxassetid://137779052339052"
+        sky.SkyboxBk = id sky.SkyboxDn = id sky.SkyboxFt = id sky.SkyboxLf = id sky.SkyboxRt = id sky.SkyboxUp = id
+        ApplyEyeMorph(player.Character)
+    else
+        if Lighting:FindFirstChild("EyeSky") then Lighting.EyeSky:Destroy() end
+        player:LoadCharacter()
+    end
+end)
+
+createButton("SPEED", "Speed", function(state)
+    getgenv().SpeedEnabled = state
+    while getgenv().SpeedEnabled do
+        if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.WalkSpeed = currentMoveSpeed end
+        task.wait()
+    end
+    if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.WalkSpeed = 16 end
+end)
+
+createButton("JUMP [150]", "Jump", function(state)
+    getgenv().JumpEnabled = state
+    while getgenv().JumpEnabled do
+        if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.JumpPower = 150 player.Character.Humanoid.UseJumpPower = true end
+        task.wait()
+    end
+    if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.JumpPower = 50 end
+end)
+
+createButton("NOCLIP", "Noclip", function(state)
+    local nc
+    nc = RunService.Stepped:Connect(function()
+        if not States.Noclip then nc:Disconnect() return end
+        if player.Character then for _, v in pairs(player.Character:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide = false end end end
+    end)
+end)
+
+createButton("PLAYER ESP", "ESP", function(state)
+    if state then 
+        for _, p in pairs(Players:GetPlayers()) do 
+            if p ~= player and p.Character then 
+                local h = Instance.new("Highlight", p.Character)
+                h.Name = "DX_Highlight"
+                h.FillColor = Color3.fromRGB(255, 0, 0)
+                h.OutlineColor = Color3.fromRGB(255, 255, 255)
+            end 
+        end
+    else 
+        for _, p in pairs(Players:GetPlayers()) do if p.Character and p.Character:FindFirstChild("DX_Highlight") then p.Character.DX_Highlight:Destroy() end end 
+    end
+end)
+
+createButton("FULLBRIGHT", "Fullbright", function(state) Lighting.Brightness = state and 2 or 1 Lighting.GlobalShadows = not state end)
+
+createButton("INF JUMP", "InfJump", function(state)
+    if infJumpConnection then infJumpConnection:Disconnect() infJumpConnection = nil end
+    if state then
+        infJumpConnection = UserInputService.JumpRequest:Connect(function()
+            if States.InfJump and player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end)
+    end
+end)
+
+-- LOWER GRAVITY SETTING (Set to 30)
+createButton("LOW GRAVITY", "LowGravity", function(state)
+    workspace.Gravity = state and 30 or 196.2
+end)
+
+createButton("SET SPAWN", nil, function() if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then customSpawnPoint = player.Character.HumanoidRootPart.CFrame end end)
+
+createButton("TP TO SPAWN", nil, function() if customSpawnPoint and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.CFrame = customSpawnPoint end end)
+
+createButton("GOTO CLOSEST", nil, function()
+    local closestPlr, dist = nil, math.huge
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            local d = (player.Character.HumanoidRootPart.Position - p.Character.HumanoidRootPart.Position).Magnitude
+            if d < dist then dist = d closestPlr = p end
+        end
+    end
+    if closestPlr then player.Character.HumanoidRootPart.CFrame = closestPlr.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3) end
+end)
+
+createButton("BLIND SHOT", nil, function() loadstring(game:HttpGet("https://rawscripts.net/raw/Blind-Shot-esp-OPen-Source-79301"))() end)
+
+-- LAYOUT PRESERVATION
+createButton("coming soon", nil, nil)
+createButton("coming soon", nil, nil)
+createButton("coming soon", nil, nil)
+
+--------------------------------------------------------------------------------
+-- CONTROLS
+--------------------------------------------------------------------------------
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local input = searchBox.Text:lower()
+    for _, child in pairs(buttonContainer:GetChildren()) do if child:IsA("Frame") then child.Visible = child.Name:lower():find(input) and true or false end end
+end)
+
+local minBtn = Instance.new("TextButton", topBar)
+minBtn.Text = "-"
+minBtn.Size = UDim2.new(0, 40, 0, 45)
+minBtn.Position = UDim2.new(1, -80, 0, 0)
+minBtn.BackgroundTransparency = 1
+minBtn.TextColor3 = Color3.new(1,1,1)
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextSize = 24
+AddTextStroke(minBtn)
+minBtn.MouseButton1Click:Connect(function() 
+    clickSound:Play() 
+    minimized = not minimized 
+    mainFrame:TweenSize(minimized and UDim2.new(0, 500, 0, 45) or UDim2.new(0, 500, 0, 400), "Out", "Quad", 0.3, true) 
+end)
+
+local closeBtn = Instance.new("TextButton", topBar)
+closeBtn.Text = "X"
+closeBtn.Size = UDim2.new(0, 40, 0, 45)
+closeBtn.Position = UDim2.new(1, -40, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.TextColor3 = Color3.fromRGB(255, 0, 0)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 20
+AddTextStroke(closeBtn)
+closeBtn.MouseButton1Click:Connect(function() clickSound:Play() gui:Destroy() end)
+
+StarterGui:SetCore("SendNotification", {Title = "DX PANEL V3", Text = "UI Fixed & Gravity Lowered!", Duration = 5})--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+-- 1. Ensure Game is Loaded
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- 2. Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local StarterGui = game:GetService("StarterGui")
+local HttpService = game:GetService("HttpService")
+
+-- 3. Local Player Setup
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local camera = workspace.CurrentCamera
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Variables
+local customSpawnPoint = nil
+local ConfigFile = "DX_V3_Config.json"
+local currentMoveSpeed = 50
+local minimized = false
+local flyBV, flyConn, camPart, camConn
+local infJumpConnection = nil
+
+local States = {
+    EyeExe = false, Speed = false, Jump = false, InfJump = false,
+    Fullbright = false, Noclip = false, ESP = false, Fly = false,
+    Freecam = false, LowGravity = false
+}
+
+--------------------------------------------------------------------------------
+-- MOVEMENT CALCULATION
+--------------------------------------------------------------------------------
+local function GetCameraRelativeDirection()
+    local dir = Vector3.new(0, 0, 0)
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.new(0, 1, 0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.new(0, 1, 0) end
+
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        local moveDir = player.Character.Humanoid.MoveDirection
+        if moveDir.Magnitude > 0 and dir.Magnitude == 0 then
+            local look = camera.CFrame.LookVector
+            local right = camera.CFrame.RightVector
+            local forwardAmt = moveDir:Dot(camera.CFrame.LookVector.Unit)
+            local rightAmt = moveDir:Dot(camera.CFrame.RightVector.Unit)
+            dir = (look * forwardAmt) + (right * rightAmt)
+        end
+    end
+    return dir
+end
+
+--------------------------------------------------------------------------------
+-- DATA & MORPH
+--------------------------------------------------------------------------------
+local function SaveConfig()
+    if writefile then pcall(function() writefile(ConfigFile, HttpService:JSONEncode(States)) end) end
+end
+
+local function LoadConfig()
+    if isfile and isfile(ConfigFile) then
+        local success, decoded = pcall(function() return HttpService:JSONDecode(readfile(ConfigFile)) end)
+        if success and decoded then 
+            for k, v in pairs(decoded) do if States[k] ~= nil then States[k] = v end end
+        end
+    end
+end
+LoadConfig()
+
+local function ApplyEyeMorph(char)
+    if not char or not States.EyeExe then return end
+    pcall(function()
+        local model = Players:GetCharacterAppearanceAsync(7782621813)
+        for _, v in pairs(char:GetChildren()) do
+            if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("CharacterMesh") or v:IsA("BodyColors") then v:Destroy() end
+        end
+        for _, v in pairs(model:GetChildren()) do v.Parent = char end
+        model:Destroy()
+    end)
+end
+player.CharacterAdded:Connect(ApplyEyeMorph)
+
+--------------------------------------------------------------------------------
+-- UI CONSTRUCTION
+--------------------------------------------------------------------------------
+if playerGui:FindFirstChild("DX_V3") then playerGui.DX_V3:Destroy() end
+
+local clickSound = Instance.new("Sound")
+clickSound.SoundId = "rbxassetid://6324790483"
+clickSound.Volume = 0.5
+clickSound.Parent = game:GetService("SoundService")
+
+local gui = Instance.new("ScreenGui", playerGui)
+gui.Name = "DX_V3"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+
+local function AddTextStroke(obj)
+    local s = Instance.new("UIStroke", obj)
+    s.Thickness = 2
+    s.Color = Color3.new(0,0,0)
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    return s
+end
+
+local tpBtn = Instance.new("ImageButton", gui)
+tpBtn.Name = "FreecamTP"
+tpBtn.Size = UDim2.new(0, 70, 0, 70)
+tpBtn.Position = UDim2.new(0.5, -35, 0.75, 0)
+tpBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+tpBtn.Image = "rbxassetid://8763582315"
+tpBtn.Visible = false
+Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(1, 0)
+local tpStroke = Instance.new("UIStroke", tpBtn)
+tpStroke.Thickness = 3
+tpStroke.Color = Color3.fromRGB(255, 0, 0)
+
+local mainFrame = Instance.new("Frame", gui)
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 500, 0, 400)
+mainFrame.Position = UDim2.new(0.5, -250, 0.5, -200)
+mainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+local mainGrad = Instance.new("UIGradient", mainFrame)
+mainGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(160, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20))}
+mainGrad.Rotation = 45
+local mainStroke = Instance.new("UIStroke", mainFrame)
+mainStroke.Thickness = 3
+mainStroke.Color = Color3.fromRGB(255, 0, 0)
+
+local topBar = Instance.new("Frame", mainFrame)
+topBar.Size = UDim2.new(1, 0, 0, 45)
+topBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+local topGrad = Instance.new("UIGradient", topBar)
+topGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 10, 10))}
+
+local titleLabel = Instance.new("TextLabel", topBar)
+titleLabel.Text = "  DX PANEL V3"
+titleLabel.Font = Enum.Font.GothamBlack
+titleLabel.TextSize = 18
+titleLabel.TextColor3 = Color3.new(1,1,1)
+titleLabel.Size = UDim2.new(0.4, 0, 1, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+AddTextStroke(titleLabel)
+
+local sliderFrame = Instance.new("Frame", topBar)
+sliderFrame.Size = UDim2.new(0, 120, 0, 18)
+sliderFrame.Position = UDim2.new(1, -210, 0.5, -9)
+sliderFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Instance.new("UICorner", sliderFrame).CornerRadius = UDim.new(0,4)
+local sliderFill = Instance.new("Frame", sliderFrame)
+sliderFill.Size = UDim2.new(0.5, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+Instance.new("UICorner", sliderFill).CornerRadius = UDim.new(0,4)
+local sliderLabel = Instance.new("TextLabel", sliderFrame)
+sliderLabel.Text = "SPD: 50"
+sliderLabel.Size = UDim2.new(1,0,1,0)
+sliderLabel.TextColor3 = Color3.new(1,1,1)
+sliderLabel.BackgroundTransparency = 1
+sliderLabel.Font = Enum.Font.GothamBold
+sliderLabel.TextSize = 11
+AddTextStroke(sliderLabel)
+
+sliderFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local con
+        con = RunService.RenderStepped:Connect(function()
+            local inputPos = (input.UserInputType == Enum.UserInputType.Touch and input.Position.X or UserInputService:GetMouseLocation().X)
+            local rel = math.clamp((inputPos - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X, 0, 1)
+            sliderFill.Size = UDim2.new(rel, 0, 1, 0)
+            currentMoveSpeed = math.floor(rel * 400)
+            sliderLabel.Text = "SPD: "..currentMoveSpeed
+            if input.UserInputState == Enum.UserInputState.End then con:Disconnect() end
+        end)
+    end
+end)
+
+local searchFrame = Instance.new("Frame", mainFrame)
+searchFrame.Size = UDim2.new(1, -20, 0, 30)
+searchFrame.Position = UDim2.new(0, 10, 0, 55)
+searchFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+searchFrame.BackgroundTransparency = 0.5
+Instance.new("UICorner", searchFrame).CornerRadius = UDim.new(0, 6)
+local searchBox = Instance.new("TextBox", searchFrame)
+searchBox.Size = UDim2.new(1, -10, 1, 0)
+searchBox.Position = UDim2.new(0, 5, 0, 0)
+searchBox.BackgroundTransparency = 1
+searchBox.PlaceholderText = "Search command..."
+searchBox.TextColor3 = Color3.new(1,1,1)
+searchBox.Font = Enum.Font.GothamBold
+searchBox.TextSize = 14
+
+local scroll = Instance.new("ScrollingFrame", mainFrame)
+scroll.Size = UDim2.new(1, -20, 1, -100)
+scroll.Position = UDim2.new(0, 10, 0, 95)
+scroll.BackgroundTransparency = 1
+scroll.ScrollBarThickness = 4
+scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+local mainListLayout = Instance.new("UIListLayout", scroll)
+mainListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+mainListLayout.Padding = UDim.new(0, 10)
+
+local buttonContainer = Instance.new("Frame", scroll)
+buttonContainer.Size = UDim2.new(1, 0, 0, 0)
+buttonContainer.BackgroundTransparency = 1
+buttonContainer.AutomaticSize = Enum.AutomaticSize.Y
+buttonContainer.LayoutOrder = 1
+local grid = Instance.new("UIGridLayout", buttonContainer)
+grid.CellSize = UDim2.new(0, 145, 0, 40)
+grid.CellPadding = UDim2.new(0, 10, 0, 10)
+grid.SortOrder = Enum.SortOrder.LayoutOrder
+grid.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+-- FIXED CREDITS (No longer overlapping)
+local creditsContainer = Instance.new("Frame", scroll)
+creditsContainer.Size = UDim2.new(1, 0, 0, 60)
+creditsContainer.BackgroundTransparency = 1
+creditsContainer.LayoutOrder = 2
+local credList = Instance.new("UIListLayout", creditsContainer)
+credList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+credList.Padding = UDim.new(0, 2)
+
+local credit1 = Instance.new("TextLabel", creditsContainer)
+credit1.Size = UDim2.new(1, 0, 0, 25)
+credit1.BackgroundTransparency = 1
+credit1.Text = "made by elijah145887"
+credit1.TextColor3 = Color3.new(1,1,1)
+credit1.Font = Enum.Font.GothamBlack
+credit1.TextSize = 18
+AddTextStroke(credit1)
+
+local credit2 = Instance.new("TextLabel", creditsContainer)
+credit2.Size = UDim2.new(1, 0, 0, 20)
+credit2.BackgroundTransparency = 1
+credit2.Text = "youtube: DevSpectraX"
+credit2.TextColor3 = Color3.fromRGB(255, 80, 80)
+credit2.Font = Enum.Font.GothamBold
+credit2.TextSize = 14
+AddTextStroke(credit2)
+
+--------------------------------------------------------------------------------
+-- BUTTON CREATOR
+--------------------------------------------------------------------------------
+local function createButton(text, stateKey, callback)
+    local btnContainer = Instance.new("Frame", buttonContainer)
+    btnContainer.Name = text
+    btnContainer.BackgroundTransparency = 1
+    local btn = Instance.new("TextButton", btnContainer)
+    btn.Text = text
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    AddTextStroke(btn)
+    local btnStroke = Instance.new("UIStroke", btn)
+    btnStroke.Thickness = 2
+    btnStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    
+    local function update()
+        if stateKey then
+            btn.BackgroundColor3 = States[stateKey] and Color3.fromRGB(200, 0, 0) or Color3.fromRGB(40, 40, 40)
+            btnStroke.Color = States[stateKey] and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(100, 100, 100)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            btnStroke.Color = Color3.fromRGB(100, 100, 100)
+        end
+    end
+
+    btn.MouseButton1Click:Connect(function() 
+        clickSound:Play() 
+        if stateKey then
+            States[stateKey] = not States[stateKey] 
+            update() 
+            SaveConfig() 
+            callback(States[stateKey]) 
+        elseif callback then callback() end
+    end)
+    update()
+    if stateKey and States[stateKey] then task.spawn(function() callback(true) end) end
+end
+
+--------------------------------------------------------------------------------
+-- FEATURES
+--------------------------------------------------------------------------------
+createButton("FLY", "Fly", function(state)
+    if state then
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            flyBV = Instance.new("BodyVelocity", player.Character.HumanoidRootPart)
+            flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+            flyConn = RunService.RenderStepped:Connect(function()
+                local dir = GetCameraRelativeDirection()
+                flyBV.Velocity = dir.Magnitude > 0 and dir.Unit * currentMoveSpeed or Vector3.new(0,0,0)
+            end)
+        end
+    else
+        if flyConn then flyConn:Disconnect() end
+        if flyBV then flyBV:Destroy() end
+    end
+end)
+
+createButton("FREECAM", "Freecam", function(state)
+    tpBtn.Visible = state
+    if state then
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.Anchored = true end
+        camPart = Instance.new("Part", workspace)
+        camPart.Anchored = true
+        camPart.Transparency = 1
+        camPart.CanCollide = false
+        camPart.CFrame = camera.CFrame
+        camera.CameraSubject = camPart
+        camConn = RunService.RenderStepped:Connect(function()
+            local dir = GetCameraRelativeDirection()
+            if dir.Magnitude > 0 then camPart.CFrame = camPart.CFrame + (dir.Unit * (currentMoveSpeed/60)) end
+        end)
+    else
+        if camConn then camConn:Disconnect() end
+        if camPart then camPart:Destroy() end
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.Anchored = false end
+        if player.Character and player.Character:FindFirstChild("Humanoid") then camera.CameraSubject = player.Character.Humanoid end
+    end
+end)
+
+tpBtn.MouseButton1Click:Connect(function() 
+    if camPart and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.CFrame = camPart.CFrame clickSound:Play() end 
+end)
+
+createButton("eye.exe", "EyeExe", function(state)
+    if state then
+        local sky = Instance.new("Sky", Lighting)
+        sky.Name = "EyeSky"
+        local id = "rbxassetid://137779052339052"
+        sky.SkyboxBk = id sky.SkyboxDn = id sky.SkyboxFt = id sky.SkyboxLf = id sky.SkyboxRt = id sky.SkyboxUp = id
+        ApplyEyeMorph(player.Character)
+    else
+        if Lighting:FindFirstChild("EyeSky") then Lighting.EyeSky:Destroy() end
+        player:LoadCharacter()
+    end
+end)
+
+createButton("SPEED", "Speed", function(state)
+    getgenv().SpeedEnabled = state
+    while getgenv().SpeedEnabled do
+        if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.WalkSpeed = currentMoveSpeed end
+        task.wait()
+    end
+    if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.WalkSpeed = 16 end
+end)
+
+createButton("JUMP [150]", "Jump", function(state)
+    getgenv().JumpEnabled = state
+    while getgenv().JumpEnabled do
+        if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.JumpPower = 150 player.Character.Humanoid.UseJumpPower = true end
+        task.wait()
+    end
+    if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.JumpPower = 50 end
+end)
+
+createButton("NOCLIP", "Noclip", function(state)
+    local nc
+    nc = RunService.Stepped:Connect(function()
+        if not States.Noclip then nc:Disconnect() return end
+        if player.Character then for _, v in pairs(player.Character:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide = false end end end
+    end)
+end)
+
+createButton("PLAYER ESP", "ESP", function(state)
+    if state then 
+        for _, p in pairs(Players:GetPlayers()) do 
+            if p ~= player and p.Character then 
+                local h = Instance.new("Highlight", p.Character)
+                h.Name = "DX_Highlight"
+                h.FillColor = Color3.fromRGB(255, 0, 0)
+                h.OutlineColor = Color3.fromRGB(255, 255, 255)
+            end 
+        end
+    else 
+        for _, p in pairs(Players:GetPlayers()) do if p.Character and p.Character:FindFirstChild("DX_Highlight") then p.Character.DX_Highlight:Destroy() end end 
+    end
+end)
+
+createButton("FULLBRIGHT", "Fullbright", function(state) Lighting.Brightness = state and 2 or 1 Lighting.GlobalShadows = not state end)
+
+createButton("INF JUMP", "InfJump", function(state)
+    if infJumpConnection then infJumpConnection:Disconnect() infJumpConnection = nil end
+    if state then
+        infJumpConnection = UserInputService.JumpRequest:Connect(function()
+            if States.InfJump and player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end)
+    end
+end)
+
+-- LOWER GRAVITY SETTING (Set to 30)
+createButton("LOW GRAVITY", "LowGravity", function(state)
+    workspace.Gravity = state and 30 or 196.2
+end)
+
+createButton("SET SPAWN", nil, function() if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then customSpawnPoint = player.Character.HumanoidRootPart.CFrame end end)
+
+createButton("TP TO SPAWN", nil, function() if customSpawnPoint and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.CFrame = customSpawnPoint end end)
+
+createButton("GOTO CLOSEST", nil, function()
+    local closestPlr, dist = nil, math.huge
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            local d = (player.Character.HumanoidRootPart.Position - p.Character.HumanoidRootPart.Position).Magnitude
+            if d < dist then dist = d closestPlr = p end
+        end
+    end
+    if closestPlr then player.Character.HumanoidRootPart.CFrame = closestPlr.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3) end
+end)
+
+createButton("BLIND SHOT", nil, function() loadstring(game:HttpGet("https://rawscripts.net/raw/Blind-Shot-esp-OPen-Source-79301"))() end)
+
+-- LAYOUT PRESERVATION
+createButton("coming soon", nil, nil)
+createButton("coming soon", nil, nil)
+createButton("coming soon", nil, nil)
+
+--------------------------------------------------------------------------------
+-- CONTROLS
+--------------------------------------------------------------------------------
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local input = searchBox.Text:lower()
+    for _, child in pairs(buttonContainer:GetChildren()) do if child:IsA("Frame") then child.Visible = child.Name:lower():find(input) and true or false end end
+end)
+
+local minBtn = Instance.new("TextButton", topBar)
+minBtn.Text = "-"
+minBtn.Size = UDim2.new(0, 40, 0, 45)
+minBtn.Position = UDim2.new(1, -80, 0, 0)
+minBtn.BackgroundTransparency = 1
+minBtn.TextColor3 = Color3.new(1,1,1)
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextSize = 24
+AddTextStroke(minBtn)
+minBtn.MouseButton1Click:Connect(function() 
+    clickSound:Play() 
+    minimized = not minimized 
+    mainFrame:TweenSize(minimized and UDim2.new(0, 500, 0, 45) or UDim2.new(0, 500, 0, 400), "Out", "Quad", 0.3, true) 
+end)
+
+local closeBtn = Instance.new("TextButton", topBar)
+closeBtn.Text = "X"
+closeBtn.Size = UDim2.new(0, 40, 0, 45)
+closeBtn.Position = UDim2.new(1, -40, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.TextColor3 = Color3.fromRGB(255, 0, 0)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 20
+AddTextStroke(closeBtn)
+closeBtn.MouseButton1Click:Connect(function() clickSound:Play() gui:Destroy() end)
+
+StarterGui:SetCore("SendNotification", {Title = "DX PANEL V3", Text = "UI Fixed & Gravity Lowered!", Duration = 5})
